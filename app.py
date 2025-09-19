@@ -1,16 +1,12 @@
-import io
-import re
-import time
-import pandas as pd
 import streamlit as st
-from typing import List, Tuple
+import pandas as pd
 from serial_utils import (
     extract_text_from_pdf,
     normalize_token,
     extract_tokens_by_regex,
     fuzzy_match_candidates,
-    normalize_series,
 )
+
 
 st.set_page_config(page_title="Validador de Seriales (DI) — 2 columnas", page_icon="✅", layout="centered")
 st.info("✅ La app cargó correctamente. Sube Excel + PDF para continuar.")
