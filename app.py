@@ -13,6 +13,8 @@ from serial_utils import (
 )
 
 st.set_page_config(page_title="Validador de Seriales (DI) — 2 columnas", page_icon="✅", layout="centered")
+st.info("✅ La app cargó correctamente. Sube Excel + PDF para continuar.")
+
 
 st.title("Validador de Seriales — Declaración de Importación (2 columnas)")
 st.caption("Sube tu Excel con dos columnas de seriales (Interno y Externo) y el PDF de la DI. Compara y genera un reporte unificado.")
