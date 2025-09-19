@@ -1,8 +1,20 @@
+# serial_utils.py (versión segura para Streamlit Cloud)
 import re
 import io
-import pdfplumber
 import pandas as pd
 from typing import List, Tuple
+
+# No importes pdfplumber arriba; hazlo dentro de la función:
+def _load_pdfplumber():
+    try:
+        import pdfplumber  # lazy import
+        return pdfplumber
+    except Exception as e:
+        raise RuntimeError(
+            "No se pudo importar pdfplumber. Revisa requirements.txt y vuelve a reiniciar la app.\n"
+            f"Detalle: {e}"
+        )
+
 try:
     from rapidfuzz.distance import Levenshtein
 except Exception:
@@ -25,6 +37,8 @@ except Exception:
     Levenshtein = _Lev
 
 def extract_text_from_pdf(file) -> str:
+    """Extrae texto concatenado de un PDF (nativo). Si es escaneado, puede venir vacío."""
+    pdfplumber = _load_pdfplumber()
     text_parts = []
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
@@ -35,7 +49,7 @@ def extract_text_from_pdf(file) -> str:
 def extract_tokens_by_regex(text: str, pattern: str) -> List[str]:
     try:
         rgx = re.compile(pattern)
-    except re.error as e:
+    except re.error:
         rgx = re.compile(r"[A-Za-z0-9\-_/\.]{6,}")
     return rgx.findall(text or "")
 
@@ -58,11 +72,5 @@ def normalize_token(s: str, do_upper=True, strip_spaces=True, strip_dashes=False
 def normalize_series(series: pd.Series, **kwargs) -> pd.Series:
     return series.apply(lambda x: normalize_token(x, **kwargs))
 
-def fuzzy_match_candidates(target: str, candidates: List[str], max_distance: int = 1, top_k: int = 3):
-    out = []
-    for c in candidates:
-        d = Levenshtein.distance(target, c)
-        if d <= max_distance:
-            out.append((c, d))
-    out.sort(key=lambda x: x[1])
-    return out[:top_k]
+def fuzzy_match_candidates(target: str, candidates: List[str], max_dis_
+
