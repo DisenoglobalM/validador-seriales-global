@@ -6,14 +6,11 @@ from typing import List, Tuple
 try:
     from rapidfuzz.distance import Levenshtein
 except Exception:
-    # fallback simple if rapidfuzz is not installed, though requirements includes it
     class _Lev:
         @staticmethod
         def distance(a, b):
-            # simple Levenshtein implementation (inefficient), but a safeguard
             if a == b:
                 return 0
-            # DP
             m, n = len(a), len(b)
             dp = [[0]*(n+1) for _ in range(m+1)]
             for i in range(m+1):
@@ -28,9 +25,6 @@ except Exception:
     Levenshtein = _Lev
 
 def extract_text_from_pdf(file) -> str:
-    """
-    Extrae texto concatenado de un PDF (nativo). Si es escaneado, el resultado puede venir vacío.
-    """
     text_parts = []
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
@@ -42,7 +36,6 @@ def extract_tokens_by_regex(text: str, pattern: str) -> List[str]:
     try:
         rgx = re.compile(pattern)
     except re.error as e:
-        # fallback a un patrón simple si hay error
         rgx = re.compile(r"[A-Za-z0-9\-_/\.]{6,}")
     return rgx.findall(text or "")
 
@@ -65,7 +58,7 @@ def normalize_token(s: str, do_upper=True, strip_spaces=True, strip_dashes=False
 def normalize_series(series: pd.Series, **kwargs) -> pd.Series:
     return series.apply(lambda x: normalize_token(x, **kwargs))
 
-def fuzzy_match_candidates(target: str, candidates: List[str], max_distance: int = 1, top_k: int = 3) -> List[Tuple[str,int]]:
+def fuzzy_match_candidates(target: str, candidates: List[str], max_distance: int = 1, top_k: int = 3):
     out = []
     for c in candidates:
         d = Levenshtein.distance(target, c)
