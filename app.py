@@ -73,7 +73,11 @@ if run_btn:
 
     # Cargar Excel
     try:
-        df = pd.read_excel(xlsx_file, sheet_name=sheet_name if sheet_name else 0)
+       df = pd.read_excel(
+    xlsx_file,
+    sheet_name=sheet_name if sheet_name else 0,
+    engine="openpyxl"
+)
     except Exception as e:
         st.error(f"No se pudo leer el Excel: {e}")
         st.stop()
