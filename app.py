@@ -1,5 +1,14 @@
 import streamlit as st
 import pandas as pd
+# --- Ensure openpyxl is available at runtime ---
+try:
+    import openpyxl  # noqa: F401
+except Exception:
+    import sys, subprocess
+    # Instala en caliente si no está (una sola vez por contenedor)
+    subprocess.run([sys.executable, "-m", "pip", "install", "openpyxl==3.1.5"], check=True)
+    import openpyxl  # reintenta
+# ------------------------------------------------
 from serial_utils import (
     extract_text_from_pdf,
     normalize_token,
