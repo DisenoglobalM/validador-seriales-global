@@ -1,2 +1,0 @@
-libgl1
-remove packages.txt to speed up deployment
