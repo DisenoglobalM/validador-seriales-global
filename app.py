@@ -78,20 +78,20 @@ def normalize_series(s: pd.Series) -> pd.Series:
     )
 
 def load_expected_table(uploaded, sheet: str | int | None) -> pd.DataFrame:
-    """
-    Lee el archivo de esperados:
-      - CSV (si termina en .csv) → pd.read_csv (no requiere openpyxl)
-      - XLSX (si termina en .xlsx) → pd.read_excel(engine='openpyxl')
-    Si openpyxl falta en el entorno, muestra un error claro pidiendo CSV.
-    """
     name = (uploaded.name or "").lower()
     try:
         if name.endswith(".csv"):
-            return pd.read_csv(uploaded, encoding="utf-8")
+            # CSV: autodetecta separador (coma o punto y coma) y maneja BOM
+            try:
+                return pd.read_csv(uploaded, encoding="utf-8-sig", sep=None, engine="python")
+            except Exception:
+                # Fallback común en entornos Windows/Excel ES
+                uploaded.seek(0)
+                return pd.read_csv(uploaded, encoding="latin-1", sep=";")
         else:
             # XLSX
             try:
-                import openpyxl  # puede no estar disponible en Py 3.13 en algunos entornos
+                import openpyxl
                 sh = sheet if sheet else 0
                 return pd.read_excel(uploaded, sheet_name=sh, engine="openpyxl")
             except Exception as e:
