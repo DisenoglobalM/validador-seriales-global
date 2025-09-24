@@ -33,47 +33,32 @@ except Exception:
                 dp[i][j] = min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost)
         return dp[m][n]
 
-def extract_text_from_pdf(file):
-    """Extrae texto de un PDF nativo (si es escaneado puede venir vacío)."""
-    pdfplumber = _load_pdfplumber()
-    text_parts = []
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            t = page.extract_text() or ""
-            text_parts.append(t)
-    return "\n".join(text_parts)
-
-def extract_tokens_by_regex(text, pattern):
+def extract_text_from_pdf(file) -> str:
+    """
+    Intenta extraer texto con pdfplumber.
+    Si falla o devuelve vacío, cae a pdfminer.six (100% Python).
+    """
+    # 1) Intento con pdfplumber
     try:
-        rgx = re.compile(pattern)
-    except re.error:
-        rgx = re.compile(r"[A-Za-z0-9\-_/\.]{6,}")
-    return rgx.findall(text or "")
+        import pdfplumber  # lazy import
+        with pdfplumber.open(file) as pdf:
+            parts = []
+            for p in pdf.pages:
+                txt = p.extract_text() or ""
+                parts.append(txt)
+        text = "\n".join(parts)
+        if text.strip():
+            return text
+    except Exception:
+        pass  # seguimos al plan B
 
-def normalize_token(s, do_upper=True, strip_spaces=True, strip_dashes=False, strip_dots=False, strip_slashes=False):
-    if s is None:
-        return ""
-    s2 = str(s)
-    if do_upper:
-        s2 = s2.upper()
-    if strip_spaces:
-        s2 = s2.replace(" ", "")
-    if strip_dashes:
-        s2 = s2.replace("-", "")
-    if strip_dots:
-        s2 = s2.replace(".", "")
-    if strip_slashes:
-        s2 = s2.replace("/", "").replace("\\", "")
-    return s2
-
-def normalize_series(series, **kwargs):
-    return series.apply(lambda x: normalize_token(x, **kwargs))
-
-def fuzzy_match_candidates(target, candidates, max_distance=1, top_k=3):
-    results = []
-    for c in candidates:
-        d = _lev(target, c)
-        if d <= max_distance:
-            results.append((c, d))
-    results.sort(key=lambda x: x[1])
-    return results[:top_k]
+    # 2) Fallback: pdfminer.six
+    try:
+        from pdfminer.high_level import extract_text as miner_extract_text
+        # Asegura el puntero al inicio (Streamlit UploadedFile es un buffer)
+        if hasattr(file, "seek"):
+            file.seek(0)
+        text = miner_extract_text(file)
+        return text or ""
+    except Exception as e:
+        raise RuntimeError(f"No pude extraer texto del PDF (fallback pdfminer): {e}")
