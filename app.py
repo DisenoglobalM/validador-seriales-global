@@ -1,216 +1,210 @@
 # app.py — Validador de Seriales (DI) — 2 columnas
-
 import io
-import re
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 from serial_utils import (
     extract_text_from_pdf,
-    normalize_token,
     extract_tokens_by_regex,
+    normalize_token,
+    normalize_series,
     fuzzy_match_candidates,
 )
 
-# ---------------------------
-# Configuración de la página
-# ---------------------------
+# -----------------------
+# Configuración de página
+# -----------------------
 st.set_page_config(
-    page_title="Validador de Seriales (DI) — 2 columnas",
+    page_title="Validador de Seriales — Declaración de Importación",
     page_icon="✅",
     layout="centered",
 )
-st.title("Validador de Seriales — Declaración de Importación (2 columnas)")
-st.caption("Sube tu Excel/CSV con dos columnas de seriales (Interno y Externo) y el PDF de la DI. Compara y genera un reporte unificado.")
+
+st.title("Validador de Seriales — Declaración de Importación")
+st.caption(
+    "Sube el **CSV** con los seriales esperados (dos columnas: Interno y Externo) "
+    "y la **Declaración** (PDF con texto o TXT)."
+)
 
 with st.expander("Configuración (opcional)", expanded=False):
-    sheet_name = st.text_input("Nombre de la hoja (solo para XLSX)", value="")
-    regex_pattern = st.text_input(
-        "Patrón regex para extraer seriales del PDF",
-        value=r"[A-Za-z0-9\-/\.]{6,}",
-        help="Ajusta según el formato de tus seriales. Por defecto, alfanumérico y separadores comunes con longitud ≥ 6.",
-    )
-    st.write("Normalización de tokens")
-    do_upper = st.checkbox("Forzar MAYÚSCULAS", value=True)
-    strip_spaces = st.checkbox("Quitar espacios internos", value=True)
-    strip_dashes = st.checkbox("Quitar guiones (-)", value=True)
-    strip_dots = st.checkbox("Quitar puntos (.)", value=True)
-    strip_slashes = st.checkbox("Quitar slashes (/ y \\)", value=True)
-
-    max_distance = st.slider(
-        "Distancia máxima (fuzzy) para sugerir coincidencias",
-        min_value=0, max_value=3, value=1,
-        help="0 = coincidencia exacta tras normalizar. 1–3 tolera OCR/errores menores."
+    st.write(
+        "Ajusta el patrón y la normalización si tus seriales tienen un formato especial."
     )
 
+# -----------------------
+# Parámetros de entrada
+# -----------------------
 st.subheader("1) Sube los archivos")
 
-xlsx_file = st.file_uploader(
-    "Excel con seriales esperados (XLSX **o CSV**)",
-    type=["xlsx", "csv"],
+col1_name = st.text_input("Nombre de la columna #1 (Interno)", value="SERIAL FISICO INTERNO")
+col2_name = st.text_input("Nombre de la columna #2 (Externo)", value="SERIAL FISICO EXTERNO")
+
+# Aceptamos solo CSV para evitar dependencias (openpyxl)
+csv_file = st.file_uploader(
+    "CSV con seriales esperados (dos columnas: Interno y Externo)",
+    type=["csv"],
+    help="Guarda tu Excel como CSV (UTF-8).",
 )
 
-pdf_file = st.file_uploader(
-    "Declaración de Importación (PDF)",
-    type=["pdf"],
+doc_file = st.file_uploader(
+    "Declaración de Importación (PDF con texto o TXT)",
+    type=["pdf", "txt"],
 )
 
-default_col1 = "SERIAL FISICO INTERNO"
-default_col2 = "SERIAL FISICO EXTERNO"
-col1 = st.text_input("Nombre de la columna #1 (Interno)", value=default_col1)
-col2 = st.text_input("Nombre de la columna #2 (Externo)", value=default_col2)
+# Regex de detección en el PDF/TXT
+pattern = st.text_input(
+    "Patrón (regex) para extraer seriales del documento",
+    value=r"[A-Za-z0-9\-_/\.]{6,}",
+    help="Si no sabes, deja el valor por defecto.",
+)
+
+# Normalización fuerte para comparar
+norm_opts = dict(
+    do_upper=True,
+    strip_spaces=True,
+    strip_dashes=True,
+    strip_dots=True,
+    strip_slashes=True,
+)
 
 run_btn = st.button("Validar ahora", type="primary", use_container_width=True)
 
-# ---------------------------
-# Utilidades locales
-# ---------------------------
-def normalize_series(s: pd.Series) -> pd.Series:
-    return s.fillna("").astype(str).apply(
-        lambda x: normalize_token(
-            x,
-            do_upper=do_upper,
-            strip_spaces=strip_spaces,
-            strip_dashes=strip_dashes,
-            strip_dots=strip_dots,
-            strip_slashes=strip_slashes,
-        )
-    )
 
-def load_expected_table(uploaded, sheet: str | int | None) -> pd.DataFrame:
-    name = (uploaded.name or "").lower()
+def read_expected_csv(file: io.BytesIO, col1: str, col2: str) -> pd.DataFrame:
+    """Lee CSV esperado, valida columnas y devuelve df con ambas columnas."""
     try:
-        if name.endswith(".csv"):
-            # CSV: autodetecta separador (coma o punto y coma) y maneja BOM
-            try:
-                return pd.read_csv(uploaded, encoding="utf-8-sig", sep=None, engine="python")
-            except Exception:
-                # Fallback común en entornos Windows/Excel ES
-                uploaded.seek(0)
-                return pd.read_csv(uploaded, encoding="latin-1", sep=";")
-        else:
-            # XLSX
-            try:
-                import openpyxl
-                sh = sheet if sheet else 0
-                return pd.read_excel(uploaded, sheet_name=sh, engine="openpyxl")
-            except Exception as e:
-                st.error(
-                    "No pude leer el XLSX con **openpyxl** en este entorno. "
-                    "Exporta tu archivo a **CSV (UTF-8)** desde Excel y súbelo de nuevo.\n\n"
-                    f"Detalle técnico: {e}"
-                )
-                st.stop()
+        df = pd.read_csv(file, encoding="utf-8-sig")
     except Exception as e:
-        st.error(f"No se pudo leer el archivo de esperados: {e}")
+        st.error(f"No se pudo leer el CSV: {e}")
         st.stop()
 
-def resolve_column(df: pd.DataFrame, name: str) -> str | None:
-    """Devuelve el nombre real de la columna en df (case-insensitive)."""
-    if name in df.columns:
-        return name
     cols_lower = {c.lower(): c for c in df.columns}
-    return cols_lower.get(name.lower())
 
-# ---------------------------
-# Ejecución
-# ---------------------------
-if run_btn:
-    if not xlsx_file or not pdf_file:
-        st.error("Por favor, sube **ambos** archivos (Excel/CSV y PDF).")
-        st.stop()
+    def resolve(name: str):
+        if name in df.columns:
+            return name
+        return cols_lower.get(name.lower())
 
-    # 1) Cargar tabla de esperados
-    df = load_expected_table(xlsx_file, sheet_name)
+    c1 = resolve(col1)
+    c2 = resolve(col2)
 
-    # 2) Resolver columnas (case-insensitive) y validar
-    real_c1 = resolve_column(df, col1)
-    real_c2 = resolve_column(df, col2)
     missing = []
-    if not real_c1:
+    if not c1:
         missing.append(col1)
-    if not real_c2:
+    if not c2:
         missing.append(col2)
+
     if missing:
-        st.error(f"No encuentro estas columnas: {missing}. Columnas disponibles: {list(df.columns)}")
+        st.error(
+            f"No encuentro estas columnas: {missing}. "
+            f"Columnas disponibles: {list(df.columns)}"
+        )
         st.stop()
 
-    # 3) Unificar y normalizar esperados
-    ser1 = normalize_series(df[real_c1])
-    ser2 = normalize_series(df[real_c2])
-    expected = pd.concat([ser1, ser2], ignore_index=True)
-    expected = expected[expected != ""].drop_duplicates()
+    return df[[c1, c2]].copy()
+
+
+def get_raw_text_from_doc(uploaded):
+    """Devuelve el texto del documento (PDF/TXT)."""
+    name = (uploaded.name or "").lower()
+    if name.endswith(".txt"):
+        try:
+            return uploaded.read().decode("utf-8-sig", errors="ignore")
+        except Exception as e:
+            st.error(f"No pude leer el TXT: {e}")
+            st.stop()
+    else:
+        try:
+            return extract_text_from_pdf(uploaded)
+        except Exception as e:
+            st.error(
+                "No se pudo extraer texto del PDF.\n\n"
+                f"Detalle técnico: {e}\n\n"
+                "Si el PDF es escaneado (imágenes) realiza OCR (convierte a PDF con texto) o "
+                "sube un .TXT con el contenido."
+            )
+            st.stop()
+
+
+if run_btn:
+    # Validaciones básicas de archivos
+    if not csv_file or not doc_file:
+        st.error("Por favor, sube **ambos** archivos (CSV y PDF/TXT).")
+        st.stop()
+
+    # 1) Lee CSV de 'esperados'
+    df_exp = read_expected_csv(csv_file, col1_name, col2_name)
+
+    # 2) Normaliza y combina los seriales esperados (interno + externo)
+    s1 = normalize_series(df_exp.iloc[:, 0], **norm_opts)
+    s2 = normalize_series(df_exp.iloc[:, 1], **norm_opts)
+    expected = pd.concat([s1, s2], ignore_index=True)
+    expected = expected[expected.astype(bool)]  # quita vacíos
     expected_set = set(expected.tolist())
 
-    st.success(f"Leídos {len(expected_set)} seriales 'esperados' de {real_c1} + {real_c2}.")
-
-    # 4) Extraer seriales del PDF
-    raw_text = extract_text_from_pdf(pdf_file)
-    if not raw_text.strip():
-        st.warning("El PDF parece no tener texto extraíble (¿escaneado?). Haz OCR y vuelve a subir.")
-        st.stop()
-
-    tokens_raw = extract_tokens_by_regex(raw_text, regex_pattern)
-    tokens = [normalize_token(
-        t,
-        do_upper=do_upper,
-        strip_spaces=strip_spaces,
-        strip_dashes=strip_dashes,
-        strip_dots=strip_dots,
-        strip_slashes=strip_slashes,
-    ) for t in tokens_raw]
-
-    tokens = [t for t in tokens if t]
-    found_set = set(tokens)
-
-    # 5) Comparaciones
-    encontrados = sorted(list(expected_set & found_set))
-    faltantes = sorted(list(expected_set - found_set))
-    extras_doc = sorted(list(found_set - expected_set))
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Encontrados", len(encontrados))
-    c2.metric("Faltantes", len(faltantes))
-    c3.metric("Extras en documento", len(extras_doc))
-
-    st.subheader("Resultados")
-
-    st.write("**Encontrados**")
-    df_encontrados = pd.DataFrame({"serial": encontrados})
-    st.dataframe(df_encontrados, use_container_width=True, height=220)
-
-    st.write("**Faltantes**")
-    df_faltantes = pd.DataFrame({"serial_esperado": faltantes})
-    st.dataframe(df_faltantes, use_container_width=True, height=220)
-
-    st.write("**Extras en documento**")
-    df_extras = pd.DataFrame({"serial_en_di": extras_doc})
-    st.dataframe(df_extras, use_container_width=True, height=220)
-
-    # 6) Sugerencias fuzzy para faltantes
-    st.write("**Posibles coincidencias (fuzzy)**")
-    fuzzy_rows = []
-    for s in faltantes:
-        suggestions = fuzzy_match_candidates(s, encontrados + extras_doc, max_distance=max_distance, top_k=3)
-        for sug, dist in suggestions:
-            fuzzy_rows.append({"serial_esperado": s, "posible_en_di": sug, "dist": dist})
-
-    df_fuzzy = pd.DataFrame(fuzzy_rows) if fuzzy_rows else pd.DataFrame(columns=["serial_esperado", "posible_en_di", "dist"])
-    st.dataframe(df_fuzzy, use_container_width=True, height=240)
-
-    # 7) Descargar reporte XLSX
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-        df_encontrados.to_excel(writer, index=False, sheet_name="encontrados")
-        df_faltantes.to_excel(writer, index=False, sheet_name="faltantes")
-        df_extras.to_excel(writer, index=False, sheet_name="extras_en_documento")
-        df_fuzzy.to_excel(writer, index=False, sheet_name="posibles_coincidencias")
-    st.download_button(
-        "📥 Descargar reporte (XLSX)",
-        data=out.getvalue(),
-        file_name="reporte_validacion_seriales.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+    st.success(
+        f"Leídos **{len(expected_set)}** seriales 'esperados' de {col1_name} + {col2_name}."
     )
 
-# Nota: si el PDF es escaneado, necesitarás hacer OCR previo o desplegar esta app con OCR.
+    # 3) Obtiene texto del documento y extrae tokens por regex
+    raw_text = get_raw_text_from_doc(doc_file)
+    tokens = extract_tokens_by_regex(raw_text, pattern)
+    tokens_norm = [normalize_token(t, **norm_opts) for t in tokens if t.strip()]
+    found_set = set(t for t in tokens_norm if t)
+
+    st.info(f"En el documento se detectaron **{len(found_set)}** tokens únicos.")
+
+    # 4) Comparación
+    missing = sorted(expected_set - found_set)
+    extras = sorted(found_set - expected_set)
+
+    colA, colB = st.columns(2)
+    with colA:
+        st.metric("Faltantes", len(missing))
+    with colB:
+        st.metric("Sobrantes en documento", len(extras))
+
+    # 5) Muestra tablas y descarga
+    if missing:
+        st.subheader("Faltantes (no aparecieron en la Declaración)")
+        df_missing = pd.DataFrame({"serial": missing})
+
+        # Sugerencias fuzzy para cada faltante (opcional, top-3 candidatos)
+        sugg_rows = []
+        for s in missing[:200]:  # limite para no demorar mucho si hay demasiados
+            cands = fuzzy_match_candidates(s, found_set, max_distance=1, top_k=3)
+            if cands:
+                txt = "; ".join([f"{c} (dist={d})" for c, d in cands])
+                sugg_rows.append({"serial": s, "sugerencias": txt})
+            else:
+                sugg_rows.append({"serial": s, "sugerencias": ""})
+        df_sugg = pd.DataFrame(sugg_rows)
+
+        st.dataframe(df_sugg, use_container_width=True, height=300)
+
+        csv_bytes = df_missing.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Descargar faltantes (CSV)",
+            data=csv_bytes,
+            file_name="faltantes.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.success("✅ No hay faltantes.")
+
+    if extras:
+        st.subheader("Sobrantes (aparecen en la Declaración pero no en el CSV)")
+        df_extras = pd.DataFrame({"serial": extras})
+        st.dataframe(df_extras, use_container_width=True, height=240)
+
+        csv_bytes = df_extras.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Descargar sobrantes (CSV)",
+            data=csv_bytes,
+            file_name="sobrantes.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.success("✅ No hay sobrantes.")
