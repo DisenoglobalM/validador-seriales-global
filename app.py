@@ -29,36 +29,48 @@ st.info("✅ La app cargó correctamente. Sube **Excel/CSV + PDF** para continua
 # --------------------------------------------
 def _read_expected_table(file, col_interno: str, col_externo: str) -> pd.DataFrame:
     """
-    Lee el archivo de seriales (CSV o XLSX), limpia los nombres de columnas y
+    Lee el archivo de seriales (CSV o XLSX), limpia nombres de columnas y
     devuelve un DataFrame con las dos columnas seleccionadas.
+    Reintenta con separadores comunes si la autodetección no funciona.
     """
+    def _clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+        df.columns = (
+            df.columns
+            .astype(str)
+            .str.replace("\ufeff", "", regex=False)  # BOM
+            .str.strip()
+            .str.replace(";", "", regex=False)      # ; pegados al nombre
+        )
+        return df
+
     try:
         if file.name.lower().endswith(".csv"):
-            # sep=None + engine="python" => autodetección de separador (; o ,)
+            # 1) Autodetección
             df = pd.read_csv(file, sep=None, engine="python", encoding="utf-8-sig")
+            if df.shape[1] == 1:
+                # 2) Reintento con ;
+                file.seek(0)
+                df = pd.read_csv(file, sep=';', engine="python", encoding="utf-8-sig")
+            if df.shape[1] == 1:
+                # 3) Reintento con ,
+                file.seek(0)
+                df = pd.read_csv(file, sep=',', engine="python", encoding="utf-8-sig")
         else:
-            # Requiere openpyxl si usas XLSX:
+            # Requiere openpyxl si usas XLSX
             df = pd.read_excel(file, engine="openpyxl")
-
     except Exception as e:
         st.error(f"No se pudo leer el archivo de seriales: {e}")
         st.stop()
 
-    # 🔹 Limpia nombres de columnas: espacios, punto y coma, y BOM
-    df.columns = (
-        df.columns
-        .astype(str)
-        .str.replace("\ufeff", "", regex=False)  # elimina BOM si existe
-        .str.strip()
-        .str.replace(";", "", regex=False)
-    )
+    # Limpia nombres de columna
+    df = _clean_columns(df)
 
     with st.expander("Ver columnas detectadas (depuración)"):
-        st.write(list(df.columns))
+        st.write("Columnas:", list(df.columns))
+        st.write("Vista previa:", df.head(3))
 
-    # Resolver nombres de columnas case-insensitive
+    # Resolver nombres de columnas (case-insensitive)
     cols_lower = {c.lower(): c for c in df.columns}
-
     def resolve(name: str):
         return cols_lower.get(name.lower())
 
