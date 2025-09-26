@@ -1,210 +1,199 @@
-import streamlit as st
+# app.py
+import io
+import sys
 import pandas as pd
+import streamlit as st
 
 from serial_utils import (
-    extract_text_from_pdf,
-    normalize_token,
-    normalize_series,
-    extract_tokens_by_regex,
-    fuzzy_match_candidates,
+    extract_text_from_pdf,     # pdfplumber -> fallback pdfminer
+    extract_tokens_by_regex,   # tokenización por regex
+    normalize_series,          # normalizador de tokens/series
+    fuzzy_match_candidates,    # opcional: sugerencias "casi iguales"
 )
 
-# ---------------------------
-# Configuración de la página
-# ---------------------------
+# ============ CONFIG ============ #
 st.set_page_config(
-    page_title="Validador de Seriales (DI) — 2 columnas",
+    page_title="Validador de Seriales — Declaración de Importación",
     page_icon="✅",
     layout="centered",
 )
+st.info("✅ La app cargó correctamente. Sube Excel/CSV + PDF/TXT para continuar.")
 
-st.title("Validador de Seriales — Declaración de Importación")
-st.caption("Sube el Excel/CSV con los seriales esperados y la Declaración en PDF (con texto).")
+DEFAULT_REGEX = r"[A-Za-z0-9\-_/\.\]{6,}"  # al menos 6, letras/números y -,_,/,.
 
-st.info("✅ La app cargó correctamente. Sube **Excel/CSV + PDF** para continuar.")
+# ============ SUBIDA DE ARCHIVOS ============ #
+left, right = st.columns(2)
 
+with left:
+    xfile = st.file_uploader(
+        "Excel con seriales esperados (XLSX o CSV)",
+        type=["xlsx", "csv"],
+        help="Sube la matriz de 'seriales internos' + 'seriales externos'."
+    )
 
-# --------------------------------------------
-# Lectura y normalización de tabla de esperados
-# --------------------------------------------
-def _read_expected_table(file, col_interno: str, col_externo: str) -> pd.DataFrame:
-    """
-    Lee el archivo de seriales (CSV o XLSX), limpia nombres de columnas y
-    devuelve un DataFrame con las dos columnas seleccionadas.
-    Reintenta con separadores comunes si la autodetección no funciona.
-    """
-    def _clean_columns(df: pd.DataFrame) -> pd.DataFrame:
-        df.columns = (
-            df.columns
-            .astype(str)
-            .str.replace("\ufeff", "", regex=False)  # BOM
-            .str.strip()
-            .str.replace(";", "", regex=False)      # ; pegados al nombre
-        )
-        return df
+with right:
+    dfile = st.file_uploader(
+        "Declaración de Importación (PDF o TXT con texto)",
+        type=["pdf", "txt"],
+        help="Si el PDF es escaneado, exporta a TXT (OCR) y súbelo aquí."
+    )
 
-    try:
-        if file.name.lower().endswith(".csv"):
-            # 1) Autodetección
-            df = pd.read_csv(file, sep=None, engine="python", encoding="utf-8-sig")
-            if df.shape[1] == 1:
-                # 2) Reintento con ;
-                file.seek(0)
-                df = pd.read_csv(file, sep=';', engine="python", encoding="utf-8-sig")
-            if df.shape[1] == 1:
-                # 3) Reintento con ,
-                file.seek(0)
-                df = pd.read_csv(file, sep=',', engine="python", encoding="utf-8-sig")
-        else:
-            # Requiere openpyxl si usas XLSX
-            df = pd.read_excel(file, engine="openpyxl")
-    except Exception as e:
-        st.error(f"No se pudo leer el archivo de seriales: {e}")
-        st.stop()
-
-    # Limpia nombres de columna
-    df = _clean_columns(df)
-
-    with st.expander("Ver columnas detectadas (depuración)"):
-        st.write("Columnas:", list(df.columns))
-        st.write("Vista previa:", df.head(3))
-
-    # Resolver nombres de columnas (case-insensitive)
-    cols_lower = {c.lower(): c for c in df.columns}
-    def resolve(name: str):
-        return cols_lower.get(name.lower())
-
-    c1 = resolve(col_interno)
-    c2 = resolve(col_externo)
-    if not c1 or not c2:
-        st.error(
-            f"No encuentro estas columnas: {[col_interno, col_externo]}. "
-            f"Columnas disponibles: {list(df.columns)}"
-        )
-        st.stop()
-
-    return df[[c1, c2]].copy()
-
-
-# ---------------
-# Interfaz (UI)
-# ---------------
-xlsx_file = st.file_uploader(
-    "Excel con seriales esperados (XLSX o CSV)",
-    type=["xlsx", "csv"],
-    help="Si no quieres instalar openpyxl, guarda tu Excel como CSV (UTF-8).",
-)
-
-pdf_file = st.file_uploader("Declaración de Importación (PDF con texto)", type=["pdf"])
-
+# nombres de columnas
 col1 = st.text_input("Nombre de la columna #1 (Interno)", "SERIAL FISICO INTERNO")
 col2 = st.text_input("Nombre de la columna #2 (Externo)", "SERIAL FISICO EXTERNO")
 
-pattern = st.text_input(
-    "Patrón (regex) para extraer seriales del PDF",
-    r"[A-Za-z0-9\-_/\.]{6,}",
-    help="Ajusta el patrón si tus seriales cambian de formato.",
+regex_pattern = st.text_input(
+    "Patrón (regex) para extraer seriales del PDF/TXT",
+    DEFAULT_REGEX,
+    help="Edita si tus seriales tienen otro formato."
 )
 
 run_btn = st.button("Validar ahora", type="primary", use_container_width=True)
 
 
-# -----------------
-# Lógica principal
-# -----------------
+# ============ FUNCIONES AUXILIARES ============ #
+def _read_table(file) -> pd.DataFrame:
+    """
+    Lee el XLSX o CSV en un DataFrame.
+    - Si XLSX y no está openpyxl instalado, recomienda subir CSV.
+    """
+    name = (file.name or "").lower()
+    if name.endswith(".csv"):
+        file.seek(0)
+        return pd.read_csv(file)
+    else:
+        try:
+            file.seek(0)
+            # pandas intentará usar 'openpyxl' si está disponible
+            return pd.read_excel(file)
+        except ImportError as e:
+            st.error(
+                "No puedo leer XLSX porque falta el motor 'openpyxl' en el servidor. "
+                "Por favor exporta tu Excel a CSV y súbelo de nuevo."
+            )
+            st.stop()
+        except Exception as e:
+            st.error(f"No se pudo leer el Excel: {e}")
+            st.stop()
+
+
+def _resolve_columns(df: pd.DataFrame, a: str, b: str) -> tuple[str, str]:
+    """Resuelve nombres de columnas sin sensibilidad a mayúsculas/minúsculas."""
+    mapping = {c.lower(): c for c in df.columns}
+    c1 = mapping.get(a.lower())
+    c2 = mapping.get(b.lower())
+    return c1, c2
+
+
+def _combine_expected(df: pd.DataFrame, c1: str, c2: str) -> list[str]:
+    """
+    Une ambas columnas de seriales y devuelve la lista de 'esperados' normalizados.
+    """
+    serie = pd.concat([df[c1], df[c2]], ignore_index=True).astype(str)
+    # normaliza (quita espacios, mayúsculas, etc.) y quita duplicados
+    norm = normalize_series(serie).dropna()
+    return pd.unique(norm).tolist()
+
+
+def _read_text_from_doc(file) -> str:
+    """
+    Devuelve el texto plano:
+    - Si es TXT: decodifica como utf-8.
+    - Si es PDF: usa extract_text_from_pdf() (pdfplumber -> pdfminer fallback).
+    """
+    name = (file.name or "").lower()
+    if name.endswith(".txt"):
+        try:
+            file.seek(0)
+        except Exception:
+            pass
+        return file.read().decode("utf-8", errors="ignore")
+    else:
+        return extract_text_from_pdf(file)
+
+
+# ============ EJECUCIÓN ============ #
 if run_btn:
-    if not xlsx_file or not pdf_file:
-        st.error("Por favor, sube **ambos** archivos (Excel/CSV y PDF).")
+    if not xfile or not dfile:
+        st.error("Por favor, sube **ambos** archivos (Excel/CSV y PDF/TXT).")
         st.stop()
 
-    # 1) Lee Excel/CSV + limpia columnas
-    df_cols = _read_expected_table(xlsx_file, col1, col2)
+    # ---- 1) Leer Excel/CSV ----
+    df = _read_table(xfile)
 
-    # 2) Combina, normaliza y deja únicos
-    all_serials = pd.concat([df_cols.iloc[:, 0], df_cols.iloc[:, 1]], ignore_index=True)
-    all_serials = normalize_series(all_serials).astype(str)
-    expected_set = set(x for x in all_serials.tolist() if x)
+    # Mostrar columnas y muestra para depurar
+    with st.expander("Ver columnas detectadas (depuración)", expanded=False):
+        st.write("Columnas:")
+        st.write(list(df.columns))
+        st.write("Vista previa:")
+        st.dataframe(df.head(10))
 
-    st.success(f"Leídos **{len(expected_set)}** seriales 'esperados' de {col1} + {col2}.")
+    c1, c2 = _resolve_columns(df, col1, col2)
+    if not c1 or not c2:
+        st.error(
+            f"No encuentro estas columnas: { [col1, col2] }. "
+            f"Columnas disponibles: {list(df.columns)}"
+        )
+        st.stop()
 
-    # 3) Extrae texto del PDF (pdfplumber → fallback pdfminer)
-        # ---- Cargar PDF ----
+    esperados = _combine_expected(df, c1, c2)
+    st.success(
+        f"Leídos {len(esperados)} seriales 'esperados' de {c1} + {c2}."
+    )
+
+    # ---- 2) Obtener texto del documento (PDF o TXT) ----
     try:
-        raw_text = extract_text_from_pdf(pdf_file)
-        st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")  # depuración
+        raw_text = _read_text_from_doc(dfile)
     except Exception as e:
-        st.error(f"No se pudo extraer texto del PDF. Verifica que no sea escaneado. Detalle: {e}")
+        st.error(f"No se pudo leer el documento. Detalle: {e}")
         st.stop()
 
-    if not raw_text.strip():
-        st.error("El PDF no contiene texto legible. Si es escaneado, aplica OCR antes de subirlo.")
-        st.stop()
+    with st.expander("Ver muestra de texto extraído del PDF/TXT (depuración)"):
+        st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")
+        st.text(raw_text[:2000] or "[vacío]")
 
     if not raw_text.strip():
         st.error(
-            "El PDF parece no contener texto legible. "
-            "Si es un PDF escaneado (solo imágenes), realiza OCR y vuelve a subirlo."
+            "El documento no contiene texto legible. "
+            "Si es un PDF escaneado (solo imágenes), aplica OCR o exporta a TXT y vuelve a subirlo."
         )
         st.stop()
 
-    # 4) Extrae tokens por regex y normaliza
-    tokens = extract_tokens_by_regex(raw_text, pattern)
-    found_set = set(
-        normalize_token(
-            t,
-            do_upper=True,
-            strip_spaces=True,
-            strip_dashes=True,
-            strip_dots=True,
-            strip_slashes=True,
-        )
-        for t in tokens if isinstance(t, str) and t.strip()
-    )
+    # ---- 3) Extraer tokens candidatos del texto ----
+    try:
+        tokens = extract_tokens_by_regex(raw_text, regex_pattern)
+    except Exception as e:
+        st.error(f"Error en el patrón regex: {e}")
+        st.stop()
 
-    st.info(f"En el documento se detectaron **{len(found_set)}** tokens únicos.")
+    # normalizar tokens del documento
+    tokens_norm = normalize_series(pd.Series(tokens)).dropna().tolist()
+    tokens_norm_set = set(tokens_norm)
 
-    # 5) Comparación + métricas
-    missing = sorted(expected_set - found_set)
-    extras = sorted(found_set - expected_set)
+    # ---- 4) Cruce: encontrados / faltantes ----
+    encontrados = [s for s in esperados if s in tokens_norm_set]
+    faltantes   = [s for s in esperados if s not in tokens_norm_set]
 
-    cA, cB = st.columns(2)
-    cA.metric("Faltantes", len(missing))
-    cB.metric("Sobrantes", len(extras))
+    st.subheader("Resultados")
+    st.write(f"✅ Encontrados: **{len(encontrados)}** / {len(esperados)} totales")
+    st.write(f"❌ Faltantes: **{len(faltantes)}**")
 
-    # 6) Tablas y descargas
-    if missing:
-        st.subheader("Faltantes (no aparecen en la Declaración)")
+    colA, colB = st.columns(2)
+    with colA:
+        with st.expander("Ver ejemplo de ENCONTRADOS"):
+            st.write(encontrados[:50] or "[vacío]")
+    with colB:
+        with st.expander("Ver ejemplo de FALTANTES"):
+            st.write(faltantes[:50] or "[vacío]")
+
+    # Opcional: sugerencias de "casi iguales" (más lento si la lista es grande)
+    with st.expander("Sugerencias (coincidencias cercanas) para algunos faltantes", expanded=False):
+        sample = faltantes[:20]  # limita por rendimiento
         rows = []
-        pool = list(found_set)
-        # Fuzzy sugerencias (limitado para no demorar si hay miles)
-        for s in missing[:200]:
-            cands = fuzzy_match_candidates(s, pool, max_distance=1, top_k=3)
-            suger = "; ".join([f"{c} (dist={d})" for c, d in cands]) if cands else ""
-            rows.append({"serial": s, "sugerencias": suger})
-        df_missing = pd.DataFrame(rows)
-        st.dataframe(df_missing, use_container_width=True, height=300)
-
-        st.download_button(
-            "⬇️ Descargar faltantes (CSV)",
-            data=df_missing[["serial"]].to_csv(index=False).encode("utf-8-sig"),
-            file_name="faltantes.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    else:
-        st.success("✅ No hay faltantes.")
-
-    if extras:
-        st.subheader("Sobrantes (aparecen en el PDF pero no en el Excel/CSV)")
-        df_extras = pd.DataFrame({"serial": extras})
-        st.dataframe(df_extras, use_container_width=True, height=240)
-
-        st.download_button(
-            "⬇️ Descargar sobrantes (CSV)",
-            data=df_extras.to_csv(index=False).encode("utf-8-sig"),
-            file_name="sobrantes.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    else:
-        st.success("✅ No hay sobrantes.")
+        for s in sample:
+            sug = fuzzy_match_candidates(s, tokens_norm, max_distance=1, top_k=3)
+            rows.append({
+                "serial_faltante": s,
+                "sugerencias": ", ".join(f"{c} (d={d})" for c, d in sug) or "-"
+            })
+        st.dataframe(pd.DataFrame(rows))
