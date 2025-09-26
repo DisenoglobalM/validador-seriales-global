@@ -128,21 +128,16 @@ if run_btn:
     st.success(f"Leídos **{len(expected_set)}** seriales 'esperados' de {col1} + {col2}.")
 
     # 3) Extrae texto del PDF (pdfplumber → fallback pdfminer)
+        # ---- Cargar PDF ----
     try:
         raw_text = extract_text_from_pdf(pdf_file)
-        # Después de:
-raw_text = extract_text_from_pdf(pdf_file)
-
-# Añade (OJO a la indentación):
-with st.expander("Ver muestra de texto extraído del PDF (depuración)"):
-    st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")
-    st.text(raw_text[:2000] or "[vacío]")
-
+        st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")  # depuración
     except Exception as e:
-        st.error(
-            "No se pudo extraer texto del PDF. Verifica que no sea escaneado.\n\n"
-            f"Detalle técnico: {e}"
-        )
+        st.error(f"No se pudo extraer texto del PDF. Verifica que no sea escaneado. Detalle: {e}")
+        st.stop()
+
+    if not raw_text.strip():
+        st.error("El PDF no contiene texto legible. Si es escaneado, aplica OCR antes de subirlo.")
         st.stop()
 
     if not raw_text.strip():
