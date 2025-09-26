@@ -130,6 +130,9 @@ if run_btn:
     # 3) Extrae texto del PDF (pdfplumber → fallback pdfminer)
     try:
         raw_text = extract_text_from_pdf(pdf_file)
+        with st.expander("Ver muestra de texto extraído del PDF (depuración)"):
+    st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")
+    st.text(raw_text[:2000] or "[vacío]")
     except Exception as e:
         st.error(
             "No se pudo extraer texto del PDF. Verifica que no sea escaneado.\n\n"
