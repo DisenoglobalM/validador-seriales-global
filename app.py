@@ -57,39 +57,42 @@ if run_btn:
         st.stop()
 
     # -------------------------
+       # -------------------------
     # 1) Cargar Excel/CSV
     # -------------------------
     try:
         if xlsx_file.name.lower().endswith(".csv"):
-            df = pd.read_csv(xlsx_file)
+            import io, csv
+
+            raw_bytes = xlsx_file.getvalue()
+            # Detecta codificación común
+            try:
+                text = raw_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw_bytes.decode("latin-1", errors="ignore")
+
+            # Sniffer para detectar el delimitador (;, , |, tab)
+            sample = text[:4096]
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=";,|\t,")
+                sep = dialect.delimiter
+            except csv.Error:
+                # fallback razonable: si hay ';' en el sample, úsalo
+                sep = ";" if ";" in sample and "," not in sample else ","
+
+            df = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
+
+            # Caso extremo: quedó 1 sola columna (encabezado completo con ';')
+            if df.shape[1] == 1 and ";" in df.columns[0]:
+                df = pd.read_csv(io.StringIO(text), sep=";", engine="python")
+
         else:
-            # Si usas openpyxl y no está, el requirements debe incluirlo.
+            # XLSX
             df = pd.read_excel(xlsx_file, engine="openpyxl")
     except Exception as e:
         st.error(f"No se pudo leer el Excel/CSV: {e}")
         st.stop()
 
-    # Resolver columnas por nombre (case-insensitive)
-    cols_lower = {c.lower(): c for c in df.columns}
-
-    def resolve(name: str):
-        return cols_lower.get(name.lower())
-
-    c1_res = resolve(col1)
-    c2_res = resolve(col2)
-
-    with st.expander("Ver columnas detectadas (depuración)"):
-        st.write("Columnas:")
-        st.write(list(df.columns))
-        st.write("Vista previa:")
-        st.dataframe(df.head(3), use_container_width=True)
-
-    if not c1_res or not c2_res:
-        st.error(
-            f"No encuentro estas columnas: {repr([col1, col2])}. "
-            f"Columnas disponibles: {list(df.columns)}"
-        )
-        st.stop()
 
     # ------ Seriales esperados (normalizados) ------
     # Evitamos reindexar sobre índices duplicados: reset_index(drop=True)
