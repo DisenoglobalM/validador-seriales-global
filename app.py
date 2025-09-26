@@ -151,19 +151,18 @@ if run:
         )
         st.stop()
 
-    # Seriales esperados (normalizados)
-    df["__seriales__"] = pd.concat([df[c1], df[c2]]).astype(str)
-    esperados_norm = normalize_series(df["__seriales__"].dropna(), do_upper=True).unique().tolist()
-    st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1} + {c2}.")
+  # ------ Seriales esperados (normalizados) ------
+# No escribimos en df; usamos una serie temporal.
+serie1 = df[c1].astype(str).reset_index(drop=True)
+serie2 = df[c2].astype(str).reset_index(drop=True)
 
-    # ---- PDF o TXT
-    raw_text = _read_text_input(pdf_or_txt) or ""
-    st.caption(f"Longitud del texto extraído: **{len(raw_text)}** caracteres")
+esperados = pd.concat([serie1, serie2], ignore_index=True)
 
-    if len(raw_text.strip()) == 0:
-        st.error("El PDF/TXT no contiene texto legible. "
-                 "Si tu archivo es un PDF escaneado (solo imágenes), aplica OCR antes de subirlo.")
-        st.stop()
+# Normaliza, quita nulos / vacíos y deja únicos
+esperados_norm = normalize_series(esperados, do_upper=True)
+esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
+
+st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1} + {c2}.")
 
     # ---- Tokens encontrados en el PDF/TXT
     tokens = extract_tokens_by_regex(raw_text, pattern)
