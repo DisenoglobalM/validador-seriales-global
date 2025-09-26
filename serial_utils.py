@@ -10,43 +10,42 @@ from typing import Iterable, List, Tuple, Set
 # -----------------------------
 def extract_text_from_pdf(file) -> str:
     """
-    Extrae texto de un PDF digital (no OCR) probando dos extractores:
-    Plan A: pdfplumber
-    Plan B: pdfminer.six
-    Si ambos fallan o el resultado es vacío, se devuelve cadena vacía,
-    lo que normalmente indica PDF escaneado (solo imágenes) o un PDF no legible.
+    Intenta extraer texto con pdfplumber y, si es poco o vacío,
+    hace fallback a pdfminer.six. Devuelve texto plano (puede ser '').
     """
-    # --- Plan A: pdfplumber ---
+    text = ""
+
+    # 1) Primer intento: pdfplumber
     try:
-        import pdfplumber
-        if hasattr(file, "seek"):
+        try:
             file.seek(0)
+        except Exception:
+            pass
+        import pdfplumber
         parts = []
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
                 t = page.extract_text() or ""
                 parts.append(t)
         text = "\n".join(parts).strip()
-        if text:
-            return text
     except Exception:
-        # continuamos al plan B
-        pass
+        text = ""
 
-    # --- Plan B: pdfminer.six ---
-    try:
-        from pdfminer.high_level import extract_text as miner_extract_text
-        if hasattr(file, "seek"):
-            file.seek(0)
-        text = (miner_extract_text(file) or "").strip()
-        if text:
-            return text
-    except Exception:
-        # si pdfminer también falla, devolvemos vacío
-        pass
+    # 2) Fallback: pdfminer.six (si quedó poco o nada)
+    if len(text) < 20:  # umbral conservador
+        try:
+            try:
+                file.seek(0)
+            except Exception:
+                pass
+            from pdfminer.high_level import extract_text as miner_extract_text
+            text2 = miner_extract_text(file) or ""
+            if len(text2.strip()) > len(text):
+                text = text2.strip()
+        except Exception:
+            pass
 
-    # Si llega aquí, no se pudo extraer texto
-    return ""
+    return text or ""
 
 
 # -----------------------------
