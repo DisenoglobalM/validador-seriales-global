@@ -1,199 +1,181 @@
-# app.py
 import io
-import sys
-import pandas as pd
 import streamlit as st
+import pandas as pd
 
 from serial_utils import (
-    extract_text_from_pdf,     # pdfplumber -> fallback pdfminer
-    extract_tokens_by_regex,   # tokenización por regex
-    normalize_series,          # normalizador de tokens/series
-    fuzzy_match_candidates,    # opcional: sugerencias "casi iguales"
+    extract_text_from_pdf,
+    normalize_series,
+    extract_tokens_by_regex,
 )
 
-# ============ CONFIG ============ #
+# ---------------------------
+# Config
+# ---------------------------
 st.set_page_config(
-    page_title="Validador de Seriales — Declaración de Importación",
+    page_title="Validador de Seriales DI (2 columnas)",
     page_icon="✅",
     layout="centered",
 )
-st.info("✅ La app cargó correctamente. Sube Excel/CSV + PDF/TXT para continuar.")
+st.info("✅ La app cargó correctamente. Sube Excel/CSV + PDF o TXT para continuar.")
 
-DEFAULT_REGEX = r"[A-Za-z0-9\-_/\.\]{6,}"  # al menos 6, letras/números y -,_,/,.
-
-# ============ SUBIDA DE ARCHIVOS ============ #
-left, right = st.columns(2)
-
-with left:
-    xfile = st.file_uploader(
-        "Excel con seriales esperados (XLSX o CSV)",
-        type=["xlsx", "csv"],
-        help="Sube la matriz de 'seriales internos' + 'seriales externos'."
-    )
-
-with right:
-    dfile = st.file_uploader(
-        "Declaración de Importación (PDF o TXT con texto)",
-        type=["pdf", "txt"],
-        help="Si el PDF es escaneado, exporta a TXT (OCR) y súbelo aquí."
-    )
-
-# nombres de columnas
-col1 = st.text_input("Nombre de la columna #1 (Interno)", "SERIAL FISICO INTERNO")
-col2 = st.text_input("Nombre de la columna #2 (Externo)", "SERIAL FISICO EXTERNO")
-
-regex_pattern = st.text_input(
-    "Patrón (regex) para extraer seriales del PDF/TXT",
-    DEFAULT_REGEX,
-    help="Edita si tus seriales tienen otro formato."
-)
-
-run_btn = st.button("Validar ahora", type="primary", use_container_width=True)
-
-
-# ============ FUNCIONES AUXILIARES ============ #
+# ---------------------------
+# Utilidades de lectura
+# ---------------------------
 def _read_table(file) -> pd.DataFrame:
     """
-    Lee el XLSX o CSV en un DataFrame.
-    - Si XLSX y no está openpyxl instalado, recomienda subir CSV.
+    Lee XLSX o CSV y devuelve un DataFrame:
+    - CSV: auto-detecta separador (coma, punto y coma, tab). Reintenta con ; si hiciera falta.
+    - XLSX: intenta pandas.read_excel; si falla por falta de openpyxl, pide subir CSV.
+    Limpia espacios de encabezados (strip).
     """
     name = (file.name or "").lower()
+
     if name.endswith(".csv"):
+        # Intento 1: auto separador + utf-8
+        try:
+            file.seek(0)
+            df = pd.read_csv(file, sep=None, engine="python")  # sniffer: , ; \t
+        except UnicodeDecodeError:
+            # Intento 2: latin-1
+            file.seek(0)
+            df = pd.read_csv(file, sep=None, engine="python", encoding="latin-1")
+
+        # Si vino todo en 1 columna con ; en el nombre, reintenta con ';'
+        if len(df.columns) == 1 and ";" in df.columns[0]:
+            try:
+                file.seek(0)
+                df = pd.read_csv(file, sep=";", engine="python")
+            except UnicodeDecodeError:
+                file.seek(0)
+                df = pd.read_csv(file, sep=";", engine="python", encoding="latin-1")
+
+        df.rename(columns=lambda c: str(c).strip(), inplace=True)
+        return df
+
+    # XLSX
+    try:
         file.seek(0)
-        return pd.read_csv(file)
-    else:
-        try:
-            file.seek(0)
-            # pandas intentará usar 'openpyxl' si está disponible
-            return pd.read_excel(file)
-        except ImportError as e:
-            st.error(
-                "No puedo leer XLSX porque falta el motor 'openpyxl' en el servidor. "
-                "Por favor exporta tu Excel a CSV y súbelo de nuevo."
-            )
-            st.stop()
-        except Exception as e:
-            st.error(f"No se pudo leer el Excel: {e}")
-            st.stop()
-
-
-def _resolve_columns(df: pd.DataFrame, a: str, b: str) -> tuple[str, str]:
-    """Resuelve nombres de columnas sin sensibilidad a mayúsculas/minúsculas."""
-    mapping = {c.lower(): c for c in df.columns}
-    c1 = mapping.get(a.lower())
-    c2 = mapping.get(b.lower())
-    return c1, c2
-
-
-def _combine_expected(df: pd.DataFrame, c1: str, c2: str) -> list[str]:
-    """
-    Une ambas columnas de seriales y devuelve la lista de 'esperados' normalizados.
-    """
-    serie = pd.concat([df[c1], df[c2]], ignore_index=True).astype(str)
-    # normaliza (quita espacios, mayúsculas, etc.) y quita duplicados
-    norm = normalize_series(serie).dropna()
-    return pd.unique(norm).tolist()
-
-
-def _read_text_from_doc(file) -> str:
-    """
-    Devuelve el texto plano:
-    - Si es TXT: decodifica como utf-8.
-    - Si es PDF: usa extract_text_from_pdf() (pdfplumber -> pdfminer fallback).
-    """
-    name = (file.name or "").lower()
-    if name.endswith(".txt"):
-        try:
-            file.seek(0)
-        except Exception:
-            pass
-        return file.read().decode("utf-8", errors="ignore")
-    else:
-        return extract_text_from_pdf(file)
-
-
-# ============ EJECUCIÓN ============ #
-if run_btn:
-    if not xfile or not dfile:
-        st.error("Por favor, sube **ambos** archivos (Excel/CSV y PDF/TXT).")
+        df = pd.read_excel(file)
+        df.rename(columns=lambda c: str(c).strip(), inplace=True)
+        return df
+    except ImportError:
+        st.error(
+            "No puedo leer XLSX porque falta el motor 'openpyxl'. "
+            "Exporta el Excel a **CSV** y súbelo de nuevo."
+        )
+        st.stop()
+    except Exception as e:
+        st.error(f"No se pudo leer el Excel: {e}")
         st.stop()
 
-    # ---- 1) Leer Excel/CSV ----
-    df = _read_table(xfile)
 
-    # Mostrar columnas y muestra para depurar
-    with st.expander("Ver columnas detectadas (depuración)", expanded=False):
-        st.write("Columnas:")
-        st.write(list(df.columns))
-        st.write("Vista previa:")
-        st.dataframe(df.head(10))
+def _read_text_input(file) -> str:
+    """
+    Lee un PDF o un TXT:
+    - TXT: lee texto directamente (utf-8/latin-1).
+    - PDF: usa serial_utils.extract_text_from_pdf()
+    """
+    name = (file.name or "").lower()
 
-    c1, c2 = _resolve_columns(df, col1, col2)
+    if name.endswith(".txt"):
+        # TXT directo
+        file.seek(0)
+        raw = file.read()
+        if isinstance(raw, bytes):
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw.decode("latin-1", errors="ignore")
+        return str(raw)
+
+    # PDF con texto
+    file.seek(0)
+    return extract_text_from_pdf(file)
+
+
+# ---------------------------
+# UI
+# ---------------------------
+left, right = st.columns(2, gap="large")
+
+with left:
+    xlsx_file = st.file_uploader(
+        "Excel con seriales esperados (XLSX o CSV)",
+        type=["xlsx", "csv"]
+    )
+    if xlsx_file is not None:
+        st.caption(f"📄 {xlsx_file.name}")
+
+with right:
+    pdf_or_txt = st.file_uploader(
+        "Declaración de Importación (PDF con texto) o TXT exportado del PDF",
+        type=["pdf", "txt"]
+    )
+    if pdf_or_txt is not None:
+        st.caption(f"📄 {pdf_or_txt.name}")
+
+col1_name = st.text_input("Nombre de la columna #1 (Interno)", "SERIAL FISICO INTERNO")
+col2_name = st.text_input("Nombre de la columna #2 (Externo)", "SERIAL FISICO EXTERNO")
+
+pattern = st.text_input(
+    "Patrón (regex) para extraer seriales del PDF/TXT",
+    r"[A-Za-z0-9\-\_/\.]{6,}",  # seguro y flexible
+    help="Ajusta si lo necesitas; por defecto: letras/números y - _ / . de longitud mínima 6"
+)
+
+run = st.button("Validar ahora", type="primary", use_container_width=True)
+
+# ---------------------------
+# Lógica principal
+# ---------------------------
+if run:
+    # Validaciones iniciales
+    if not xlsx_file or not pdf_or_txt:
+        st.error("Por favor, sube **ambos** archivos: Excel/CSV y PDF/TXT.")
+        st.stop()
+
+    # ---- Excel/CSV
+    df = _read_table(xlsx_file)
+    st.expander("Ver columnas detectadas (depuración)", expanded=False).write(
+        {"Columnas": list(df.columns), "Vista previa": df.head(3)}
+    )
+
+    # Resolver columnas informadas por el usuario (case-insensitive, strip)
+    cols_lower = {str(c).strip().lower(): c for c in df.columns}
+    c1 = cols_lower.get(col1_name.strip().lower())
+    c2 = cols_lower.get(col2_name.strip().lower())
     if not c1 or not c2:
         st.error(
-            f"No encuentro estas columnas: { [col1, col2] }. "
+            f"No encuentro estas columnas: { [col1_name, col2_name] }. "
             f"Columnas disponibles: {list(df.columns)}"
         )
         st.stop()
 
-    esperados = _combine_expected(df, c1, c2)
-    st.success(
-        f"Leídos {len(esperados)} seriales 'esperados' de {c1} + {c2}."
-    )
+    # Seriales esperados (normalizados)
+    df["__seriales__"] = pd.concat([df[c1], df[c2]]).astype(str)
+    esperados_norm = normalize_series(df["__seriales__"].dropna(), do_upper=True).unique().tolist()
+    st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1} + {c2}.")
 
-    # ---- 2) Obtener texto del documento (PDF o TXT) ----
-    try:
-        raw_text = _read_text_from_doc(dfile)
-    except Exception as e:
-        st.error(f"No se pudo leer el documento. Detalle: {e}")
+    # ---- PDF o TXT
+    raw_text = _read_text_input(pdf_or_txt) or ""
+    st.caption(f"Longitud del texto extraído: **{len(raw_text)}** caracteres")
+
+    if len(raw_text.strip()) == 0:
+        st.error("El PDF/TXT no contiene texto legible. "
+                 "Si tu archivo es un PDF escaneado (solo imágenes), aplica OCR antes de subirlo.")
         st.stop()
 
-    with st.expander("Ver muestra de texto extraído del PDF/TXT (depuración)"):
-        st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")
-        st.text(raw_text[:2000] or "[vacío]")
+    # ---- Tokens encontrados en el PDF/TXT
+    tokens = extract_tokens_by_regex(raw_text, pattern)
+    # normaliza cada token
+    tokens_norm = normalize_series(pd.Series(tokens), do_upper=True).tolist()
 
-    if not raw_text.strip():
-        st.error(
-            "El documento no contiene texto legible. "
-            "Si es un PDF escaneado (solo imágenes), aplica OCR o exporta a TXT y vuelve a subirlo."
-        )
-        st.stop()
+    # ---- Comparación
+    faltantes = [s for s in esperados_norm if s not in set(tokens_norm)]
 
-    # ---- 3) Extraer tokens candidatos del texto ----
-    try:
-        tokens = extract_tokens_by_regex(raw_text, regex_pattern)
-    except Exception as e:
-        st.error(f"Error en el patrón regex: {e}")
-        st.stop()
-
-    # normalizar tokens del documento
-    tokens_norm = normalize_series(pd.Series(tokens)).dropna().tolist()
-    tokens_norm_set = set(tokens_norm)
-
-    # ---- 4) Cruce: encontrados / faltantes ----
-    encontrados = [s for s in esperados if s in tokens_norm_set]
-    faltantes   = [s for s in esperados if s not in tokens_norm_set]
-
-    st.subheader("Resultados")
-    st.write(f"✅ Encontrados: **{len(encontrados)}** / {len(esperados)} totales")
-    st.write(f"❌ Faltantes: **{len(faltantes)}**")
-
-    colA, colB = st.columns(2)
-    with colA:
-        with st.expander("Ver ejemplo de ENCONTRADOS"):
-            st.write(encontrados[:50] or "[vacío]")
-    with colB:
-        with st.expander("Ver ejemplo de FALTANTES"):
-            st.write(faltantes[:50] or "[vacío]")
-
-    # Opcional: sugerencias de "casi iguales" (más lento si la lista es grande)
-    with st.expander("Sugerencias (coincidencias cercanas) para algunos faltantes", expanded=False):
-        sample = faltantes[:20]  # limita por rendimiento
-        rows = []
-        for s in sample:
-            sug = fuzzy_match_candidates(s, tokens_norm, max_distance=1, top_k=3)
-            rows.append({
-                "serial_faltante": s,
-                "sugerencias": ", ".join(f"{c} (d={d})" for c, d in sug) or "-"
-            })
-        st.dataframe(pd.DataFrame(rows))
+    if faltantes:
+        st.error(f"❌ No se encontraron {len(faltantes)} seriales. Ejemplo: {faltantes[:10]}")
+        with st.expander("Ver lista completa de faltantes"):
+            st.write(faltantes)
+    else:
+        st.success("✅ Todos los seriales esperados están en la Declaración de Importación / TXT.")
