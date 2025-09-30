@@ -93,6 +93,50 @@ if run_btn:
         st.error(f"No se pudo leer el Excel/CSV: {e}")
         st.stop()
 
+    # -------------------------
+# 2) Resolver columnas solicitadas por el usuario
+# -------------------------
+cols_lower = {str(c).strip().lower(): c for c in df.columns}
+
+def resolve(colname: str):
+    if not colname:
+        return None
+    key = str(colname).strip().lower()
+    # match directo
+    if key in cols_lower:
+        return cols_lower[key]
+    # match ignorando espacios duplicados
+    key_norm = " ".join(key.split())
+    for c in df.columns:
+        c_norm = " ".join(str(c).strip().lower().split())
+        if c_norm == key_norm:
+            return c
+    return None
+
+c1 = resolve(col1)
+c2 = resolve(col2)
+if not c1 or not c2:
+    st.error(
+        f"No encuentro estas columnas: {col1!r}, {col2!r}. "
+        f"Columnas disponibles: {list(df.columns)}"
+    )
+    st.stop()
+
+# -------------------------
+# 3) Seriales esperados (normalizados)
+# -------------------------
+# NO escribimos en df; creamos series temporales y concatenamos
+serie1 = df[c1].astype(str).reset_index(drop=True)
+serie2 = df[c2].astype(str).reset_index(drop=True)
+
+esperados = pd.concat([serie1, serie2], ignore_index=True)
+
+# Normaliza, quita nulos/vacíos y deja únicos
+esperados_norm = normalize_series(esperados, do_upper=True)
+esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
+
+st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1} + {c2}.")
+
 
     # ------ Seriales esperados (normalizados) ------
     # Evitamos reindexar sobre índices duplicados: reset_index(drop=True)
