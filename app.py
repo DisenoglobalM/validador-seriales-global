@@ -1,214 +1,84 @@
 import streamlit as st
 import pandas as pd
-
 from serial_utils import (
     extract_text_from_pdf,
-    normalize_series,        # aplica normalización de tokens (mayúsculas, sin espacios, etc.)
-    normalize_token,         # para listas sueltas
-    extract_tokens_by_regex, # aplica regex sobre texto
+    normalize_series,
+    extract_tokens_by_regex,
+    fuzzy_match_candidates,
 )
 
 st.set_page_config(
     page_title="Validador de Seriales (DI) — 2 columnas",
     page_icon="✅",
-    layout="centered",
+    layout="centered"
 )
 
 st.info("✅ La app cargó correctamente. Sube Excel/CSV + PDF o TXT para continuar.")
 
-# -------------------------
-# Entrada de archivos
-# -------------------------
-c1, c2 = st.columns(2, gap="large")
-
-with c1:
-    xlsx_file = st.file_uploader(
-        "Excel con seriales esperados (XLSX o CSV)",
-        type=["xlsx", "csv"],
-        help="Debes subir el Excel/CSV con las dos columnas de seriales."
-    )
-
-with c2:
-    pdf_or_txt_file = st.file_uploader(
-        "Declaración de Importación (PDF con texto) o TXT",
-        type=["pdf", "txt"],
-        help="Si el PDF está escaneado, conviértelo a TXT (OCR) y súbelo aquí."
-    )
-
+# ---- Inputs ----
+xlsx_file = st.file_uploader("Excel con seriales esperados (XLSX o CSV)", type=["xlsx", "csv"])
+pdf_file = st.file_uploader("Declaración de Importación (PDF con texto) o TXT", type=["pdf", "txt"])
 col1 = st.text_input("Nombre de la columna #1 (Interno)", "SERIAL FISICO INTERNO")
 col2 = st.text_input("Nombre de la columna #2 (Externo)", "SERIAL FISICO EXTERNO")
-
-# Patrón regex para extraer seriales del PDF/TXT
-pattern = st.text_input(
-    "Patrón (regex) para extraer seriales del PDF/TXT",
-    r"[A-Za-z0-9\-_\/\.\|]{6,}",
-    help="Ajusta si tus seriales tienen otro formato. Mínimo 6 caracteres por defecto."
-)
+pattern = st.text_input("Patrón (regex) para extraer seriales del PDF/TXT", r"[A-Za-z0-9\-_\/\.]{6,}")
 
 run_btn = st.button("Validar ahora", type="primary", use_container_width=True)
 
-# -------------------------
-# Acción principal
-# -------------------------
 if run_btn:
-    # Validación de presencia de archivos
-    if not xlsx_file or not pdf_or_txt_file:
-        st.error("Por favor, sube **ambos** archivos: Excel/CSV y PDF/TXT.")
+    if not xlsx_file or not pdf_file:
+        st.error("Por favor, sube **ambos** archivos (Excel/CSV y PDF/TXT).")
         st.stop()
 
-    # -------------------------
-       # -------------------------
-    # 1) Cargar Excel/CSV
-    # -------------------------
+    # ---- 1) Cargar Excel o CSV ----
     try:
-        if xlsx_file.name.lower().endswith(".csv"):
-            import io, csv
-
-            raw_bytes = xlsx_file.getvalue()
-            # Detecta codificación común
-            try:
-                text = raw_bytes.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = raw_bytes.decode("latin-1", errors="ignore")
-
-            # Sniffer para detectar el delimitador (;, , |, tab)
-            sample = text[:4096]
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=";,|\t,")
-                sep = dialect.delimiter
-            except csv.Error:
-                # fallback razonable: si hay ';' en el sample, úsalo
-                sep = ";" if ";" in sample and "," not in sample else ","
-
-            df = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
-
-            # Caso extremo: quedó 1 sola columna (encabezado completo con ';')
-            if df.shape[1] == 1 and ";" in df.columns[0]:
-                df = pd.read_csv(io.StringIO(text), sep=";", engine="python")
-
+        if xlsx_file.name.endswith(".csv"):
+            df = pd.read_csv(xlsx_file, sep=";")
         else:
-            # XLSX
             df = pd.read_excel(xlsx_file, engine="openpyxl")
     except Exception as e:
-        st.error(f"No se pudo leer el Excel/CSV: {e}")
+        st.error(f"No se pudo leer el archivo: {e}")
         st.stop()
 
-    # -------------------------
-# 2) Resolver columnas solicitadas por el usuario
-# -------------------------
-cols_lower = {str(c).strip().lower(): c for c in df.columns}
+    # ---- 2) Resolver columnas solicitadas ----
+    cols_lower = {c.lower().strip(): c for c in df.columns}
+    c1_res = cols_lower.get(col1.lower().strip())
+    c2_res = cols_lower.get(col2.lower().strip())
 
-def resolve(colname: str):
-    if not colname:
-        return None
-    key = str(colname).strip().lower()
-    # match directo
-    if key in cols_lower:
-        return cols_lower[key]
-    # match ignorando espacios duplicados
-    key_norm = " ".join(key.split())
-    for c in df.columns:
-        c_norm = " ".join(str(c).strip().lower().split())
-        if c_norm == key_norm:
-            return c
-    return None
+    if not c1_res or not c2_res:
+        st.error(f"No encuentro estas columnas: {[col1, col2]}. "
+                 f"Columnas disponibles: {list(df.columns)}")
+        st.stop()
 
-c1 = resolve(col1)
-c2 = resolve(col2)
-if not c1 or not c2:
-    st.error(
-        f"No encuentro estas columnas: {col1!r}, {col2!r}. "
-        f"Columnas disponibles: {list(df.columns)}"
-    )
-    st.stop()
-
-# -------------------------
-# 3) Seriales esperados (normalizados)
-# -------------------------
-# NO escribimos en df; creamos series temporales y concatenamos
-serie1 = df[c1].astype(str).reset_index(drop=True)
-serie2 = df[c2].astype(str).reset_index(drop=True)
-
-esperados = pd.concat([serie1, serie2], ignore_index=True)
-
-# Normaliza, quita nulos/vacíos y deja únicos
-esperados_norm = normalize_series(esperados, do_upper=True)
-esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
-
-st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1} + {c2}.")
-
-
-    # ------ Seriales esperados (normalizados) ------
-    # Evitamos reindexar sobre índices duplicados: reset_index(drop=True)
+    # ---- 3) Crear serie de seriales esperados ----
     serie1 = df[c1_res].astype(str).reset_index(drop=True)
     serie2 = df[c2_res].astype(str).reset_index(drop=True)
-
-    # Concatenar ambas series (mismo largo o distinto, sin mezclar índices)
     esperados = pd.concat([serie1, serie2], ignore_index=True)
 
-    # Normalizar, quitar vacíos y dejar únicos
+    # Normalizar seriales
     esperados_norm = normalize_series(esperados, do_upper=True)
     esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
 
-    st.success(
-        f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1_res} + {c2_res}."
-    )
+    st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1_res} + {c2_res}.")
 
-    # -------------------------
-    # 2) Extraer texto del PDF/TXT
-    # -------------------------
-    raw_text = ""
-
-    if pdf_or_txt_file.name.lower().endswith(".txt"):
-        # TXT: lo leemos directo
-        try:
-            raw_text = pdf_or_txt_file.read().decode("utf-8", errors="ignore")
-        except Exception as e:
-            st.error(f"No se pudo leer el TXT: {e}")
-            st.stop()
-    else:
-        # PDF: extraemos con pdfplumber (ya envuelto en serial_utils)
-        try:
-            raw_text = extract_text_from_pdf(pdf_or_txt_file)
-        except Exception as e:
-            st.error(
-                "No se pudo extraer texto del PDF. "
-                "Si es un PDF escaneado, realiza OCR y súbelo como TXT. "
-                f"Detalle técnico: {e}"
-            )
-            st.stop()
-
-    with st.expander("Info de depuración del texto extraído"):
-        st.write(f"Longitud del texto extraído: {len(raw_text)} caracteres")
-
-    if not raw_text or not raw_text.strip():
-        st.error(
-            "El PDF/TXT no contiene texto legible. "
-            "Si es un PDF escaneado (sólo imágenes), realiza OCR antes de subirlo."
-        )
-        st.stop()
-
-    # -------------------------
-    # 3) Extraer tokens del texto usando el regex
-    # -------------------------
+    # ---- 4) Cargar PDF/TXT ----
     try:
-        tokens = extract_tokens_by_regex(raw_text, pattern)
+        raw_text = extract_text_from_pdf(pdf_file)
     except Exception as e:
-        st.error(f"El patrón regex no es válido: {e}")
+        st.error(f"No se pudo extraer texto del archivo. Detalle: {e}")
         st.stop()
 
-    # Normalizamos los tokens encontrados para comparar en el mismo formato
-    tokens_norm = [normalize_token(t) for t in tokens]
+    if not raw_text.strip():
+        st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
+        st.stop()
 
-    # -------------------------
-    # 4) Comparar esperados vs. encontrados
-    # -------------------------
+    # ---- 5) Buscar seriales en el texto ----
+    tokens = extract_tokens_by_regex(raw_text, pattern)
+    tokens_norm = [normalize_series(pd.Series([t])).iloc[0] for t in tokens]
+
     faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
     if faltantes:
-        st.error(
-            f"No se encontraron {len(faltantes)} seriales en el documento. "
-            f"Ejemplos: {faltantes[:10]}"
-        )
+        st.error(f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
+                 f"Ejemplo: {faltantes[:10]}")
     else:
-        st.success("✅ Todos los seriales esperados están en la Declaración de Importación / TXT.")
+        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
