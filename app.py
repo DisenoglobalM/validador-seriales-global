@@ -63,7 +63,7 @@ if run_btn:
 
     # ---- 4) Cargar PDF/TXT ----
     try:
-        raw_text = extract_text_from_pdf(pdf_file)
+        raw_text = extract_text_from_file(pdf_file)
     except Exception as e:
         st.error(f"No se pudo extraer texto del archivo. Detalle: {e}")
         st.stop()
