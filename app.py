@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 from serial_utils import (
-    extract_text_from_pdf,
+    extract_text_from_pdf,     # puedes dejarlo si lo usas en otro lado
+    extract_text_from_file,    # <-- NUEVO
     normalize_series,
     extract_tokens_by_regex,
     fuzzy_match_candidates,
