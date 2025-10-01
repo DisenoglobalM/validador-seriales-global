@@ -47,6 +47,47 @@ def extract_text_from_pdf(file) -> str:
 
     return text or ""
 
+# --- En serial_utils.py ---
+
+def _read_text_file(uploaded_file):
+    """
+    Lee un .txt de manera robusta. Intenta varias codificaciones y
+    no revienta si hay caracteres extraños.
+    """
+    # Lee los bytes (Streamlit UploadedFile funciona con getvalue/seek)
+    try:
+        data = uploaded_file.getvalue()
+    except Exception:
+        data = uploaded_file.read()
+
+    # Regresa el puntero al inicio, por si luego el mismo handle se reusa
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    # Intenta decodificar con varias codificaciones comunes
+    for enc in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
+        try:
+            text = data.decode(enc, errors="ignore")
+            if text is not None:
+                return text
+        except Exception:
+            continue
+    return ""
+
+
+def extract_text_from_file(uploaded_file):
+    """
+    Si es .txt -> leer como texto (robusto).
+    Si es PDF -> usa la función existente extract_text_from_pdf(uploaded_file).
+    """
+    name = (getattr(uploaded_file, "name", "") or "").lower()
+    if name.endswith(".txt"):
+        return _read_text_file(uploaded_file)
+    # Para PDF u otros, mantenemos tu flujo actual:
+    return extract_text_from_pdf(uploaded_file)
+
 
 # -----------------------------
 # Normalización y regex
