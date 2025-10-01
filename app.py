@@ -50,16 +50,30 @@ if run_btn:
                  f"Columnas disponibles: {list(df.columns)}")
         st.stop()
 
-    # ---- 3) Crear serie de seriales esperados ----
-    serie1 = df[c1_res].astype(str).reset_index(drop=True)
-    serie2 = df[c2_res].astype(str).reset_index(drop=True)
-    esperados = pd.concat([serie1, serie2], ignore_index=True)
+   # ---- 3) Seriales esperados (normalizados) ----
+# serie1 y serie2 ya deben existir como df[c1_res] y df[c2_res]
+serie1 = df[c1_res].astype(str).reset_index(drop=True)
+serie2 = df[c2_res].astype(str).reset_index(drop=True)
 
-    # Normalizar seriales
-    esperados_norm = normalize_series(esperados, do_upper=True)
-    esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
+# Une ambas columnas una debajo de la otra
+esperados = pd.concat([serie1, serie2], ignore_index=True)
 
-    st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1_res} + {c2_res}.")
+# Normaliza + quita vacíos/nulos + deja únicos (conserva el orden)
+esperados_norm = (
+    normalize_series(
+        esperados,
+        do_upper=True,        # MAYÚSCULAS
+        strip_spaces=True,    # sin espacios
+        strip_dashes=True,    # sin guiones
+        strip_dots=True,      # sin puntos
+        strip_slashes=True    # sin / y \
+    )
+    .loc[lambda s: s.str.len() > 0]  # quita vacíos
+    .drop_duplicates()
+    .tolist()
+)
+
+st.success(f"Leídos {len(esperados_norm)} seriales 'esperados' de {c1_res} + {c2_res}.")
 
     # ---- 4) Cargar PDF/TXT ----
     try:
