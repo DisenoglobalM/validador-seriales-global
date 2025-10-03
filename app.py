@@ -100,12 +100,11 @@ def _fix_line_wraps(text: str) -> str:
 
 # --- justo después de extraer el texto ---
 raw_text = extract_text_from_file(pdf_file)  # o tu función actual
-raw_text = _fix_line_wraps(raw_text)         # <-- APLICAR EL FIX AQUÍ
-
+raw_text = _fix_line_wraps(raw_text)         # <-- FIX
 
 if not raw_text.strip():
-        st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
-        st.stop()
+    st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
+    st.stop()
 
         # ---- 5) Buscar seriales en el texto ----
     tokens = extract_tokens_by_regex(raw_text, pattern)
