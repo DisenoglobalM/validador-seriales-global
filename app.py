@@ -77,27 +77,27 @@ if run_btn:
         st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
         st.stop()
 
-    # ---- 5) Buscar seriales en el texto ----
+        # ---- 5) Buscar seriales en el texto ----
     tokens = extract_tokens_by_regex(raw_text, pattern)
     tokens_norm = [normalize_series(pd.Series([t])).iloc[0] for t in tokens]
 
     faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
-   if faltantes:
-    st.error(
-        f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
-        f"Ejemplo: {faltantes[:10]}"
-    )
+    if faltantes:
+        st.error(
+            f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
+            f"Ejemplo: {faltantes[:10]}"
+        )
 
-    # --- Exportar faltantes a CSV ---
-    import io
-    buf = io.StringIO()
-    pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
-    st.download_button(
-        label="📥 Descargar seriales faltantes en CSV",
-        data=buf.getvalue(),
-        file_name="seriales_faltantes.csv",
-        mime="text/csv",
-    )
-else:
-    st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
+        # Exportar faltantes a CSV
+        import io
+        buf = io.StringIO()
+        pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
+        st.download_button(
+            label="⬇️ Descargar seriales faltantes en CSV",
+            data=buf.getvalue(),
+            file_name="faltantes.csv",
+            mime="text/csv"
+        )
+    else:
+        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
