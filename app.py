@@ -85,10 +85,8 @@ if run_btn:
 
     if faltantes:
         st.error(f"No se encontraron {len(faltantes)} seriales en el PDF/TXT.\nEjemplo: {faltantes[:10]}")
-    else:
-        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
-
-import io
+        
+        import io
 
 buf = io.StringIO()
 pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
@@ -98,3 +96,6 @@ st.download_button(
     file_name="seriales_faltantes.csv",
     mime="text/csv",
 )
+
+    else:
+        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
