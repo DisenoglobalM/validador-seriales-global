@@ -103,7 +103,7 @@ raw_text = extract_text_from_file(pdf_file)  # o tu función actual
 raw_text = _fix_line_wraps(raw_text)         # <-- APLICAR EL FIX AQUÍ
 
 
-    if not raw_text.strip():
+if not raw_text.strip():
         st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
         st.stop()
 
