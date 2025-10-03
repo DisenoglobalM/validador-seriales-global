@@ -83,13 +83,13 @@ if run_btn:
 
     faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
-    if faltantes:
+   if faltantes:
     st.error(
         f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
         f"Ejemplo: {faltantes[:10]}"
     )
 
-    # --- exportar faltantes a CSV ---
+    # --- Exportar faltantes a CSV ---
     import io
     buf = io.StringIO()
     pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
