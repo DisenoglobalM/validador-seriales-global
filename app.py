@@ -84,18 +84,20 @@ if run_btn:
     faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
     if faltantes:
-        st.error(f"No se encontraron {len(faltantes)} seriales en el PDF/TXT.\nEjemplo: {faltantes[:10]}")
-        
-        import io
+    st.error(
+        f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
+        f"Ejemplo: {faltantes[:10]}"
+    )
 
-buf = io.StringIO()
-pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
-st.download_button(
-    "Descargar faltantes (CSV)",
-    data=buf.getvalue().encode("utf-8"),
-    file_name="seriales_faltantes.csv",
-    mime="text/csv",
-)
-
-    else:
-        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
+    # --- exportar faltantes a CSV ---
+    import io
+    buf = io.StringIO()
+    pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
+    st.download_button(
+        label="📥 Descargar seriales faltantes en CSV",
+        data=buf.getvalue(),
+        file_name="seriales_faltantes.csv",
+        mime="text/csv",
+    )
+else:
+    st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
