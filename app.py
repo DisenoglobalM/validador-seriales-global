@@ -73,6 +73,35 @@ if run_btn:
         st.error(f"No se pudo extraer texto del archivo. Detalle: {e}")
         st.stop()
 
+    import re
+
+def _fix_line_wraps(text: str) -> str:
+    s = text
+
+    # 1) Si alguna vez el PDF insertó guion + salto, también lo reparamos
+    #    (no hace daño aunque tus PDFs no lo usen)
+    s = re.sub(r'-\s*\n\s*', '', s)
+
+    # 2) Repara "cortes de renglón" SIN guion dentro de palabras alfanuméricas.
+    #    Solo unimos si hay secuencias alfanuméricas de al menos 4 caracteres
+    #    a ambos lados del salto, para no pegar frases normales.
+    #    Lo hacemos en bucle por si un mismo serial quedó partido varias veces.
+    while True:
+        new_s = re.sub(
+            r'([A-Za-z0-9]{4,})\s*\n\s*([A-Za-z0-9]{4,})',
+            r'\1\2',
+            s
+        )
+        if new_s == s:
+            break
+        s = new_s
+
+    return s
+
+# --- justo después de extraer el texto ---
+raw_text = extract_text_from_file(pdf_file)  # o tu función actual
+raw_text = _fix_line_wraps(raw_text)         # <-- APLICAR EL FIX AQUÍ
+
     if not raw_text.strip():
         st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
         st.stop()
