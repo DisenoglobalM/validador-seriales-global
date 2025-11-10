@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from serial_utils import (
     extract_text_from_file,
     normalize_series,
