@@ -24,6 +24,9 @@ col1 = st.text_input("Nombre de la columna #1 (Interno)", "SERIAL FISICO INTERNO
 col2 = st.text_input("Nombre de la columna #2 (Externo)", "SERIAL FISICO EXTERNO")
 pattern = st.text_input("Patrón (regex) para extraer seriales del PDF/TXT", r"[A-Za-z0-9\-_\/\.]{6,}")
 
+# <<< añadido: checkbox de diagnóstico avanzado
+modo_diagnostico = st.checkbox("Modo diagnóstico avanzado (opcional)")
+
 run_btn = st.button("Validar ahora", type="primary", use_container_width=True)
 
 # ---- 2) Ejecución ----
@@ -107,27 +110,54 @@ if not raw_text.strip():
     st.error("⚠️ El archivo no contiene texto legible. Si es PDF escaneado, aplica OCR antes de subirlo.")
     st.stop()
 
-        # ---- 5) Buscar seriales en el texto ----
-    tokens = extract_tokens_by_regex(raw_text, pattern)
-    tokens_norm = [normalize_series(pd.Series([t])).iloc[0] for t in tokens]
+# ---- 5) Buscar seriales en el texto ----
+tokens = extract_tokens_by_regex(raw_text, pattern)
+tokens_norm = [normalize_series(pd.Series([t])).iloc[0] for t in tokens]
 
-    faltantes = [s for s in esperados_norm if s not in tokens_norm]
+faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
-    if faltantes:
-        st.error(
-            f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
-            f"Ejemplo: {faltantes[:10]}"
-        )
+# <<< añadido: modo diagnóstico avanzado (solo informativo)
+if run_btn and modo_diagnostico:
+    st.subheader("🔎 Diagnóstico avanzado")
 
-        # Exportar faltantes a CSV
-        import io
-        buf = io.StringIO()
-        pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
-        st.download_button(
-            label="⬇️ Descargar seriales faltantes en CSV",
-            data=buf.getvalue(),
-            file_name="faltantes.csv",
-            mime="text/csv"
-        )
-    else:
-        st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
+    with st.expander("📄 Seriales extraídos del PDF/TXT (vista previa)"):
+        st.write(f"Se extrajeron {len(tokens_norm)} tokens normalizados.")
+        st.dataframe(tokens_norm[:200])
+
+    pdf_duplicados = pd.Series(tokens_norm)
+    dups = pdf_duplicados[pdf_duplicados.duplicated()].unique()
+
+    with st.expander("♻ Seriales duplicados en el PDF"):
+        if len(dups) > 0:
+            st.warning(f"Se encontraron {len(dups)} duplicados en el PDF.")
+            st.write(dups)
+        else:
+            st.info("No se encontraron duplicados en el PDF.")
+
+    extras_pdf = [t for t in tokens_norm if t not in esperados_norm]
+    with st.expander("🧩 Seriales en el PDF que NO están en el Excel"):
+        if extras_pdf:
+            st.warning(f"{len(extras_pdf)} seriales aparecen en el PDF pero no están en tu Excel.")
+            st.write(extras_pdf[:50])
+        else:
+            st.success("No hay seriales extra en el PDF.")
+
+# ---- 6) Resultado final ----
+if faltantes:
+    st.error(
+        f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
+        f"Ejemplo: {faltantes[:10]}"
+    )
+
+    # Exportar faltantes a CSV
+    import io
+    buf = io.StringIO()
+    pd.Series(faltantes, name="serial_faltante").to_csv(buf, index=False)
+    st.download_button(
+        label="⬇️ Descargar seriales faltantes en CSV",
+        data=buf.getvalue(),
+        file_name="faltantes.csv",
+        mime="text/csv"
+    )
+else:
+    st.success("✅ Todos los seriales esperados están en la Declaración de Importación.")
