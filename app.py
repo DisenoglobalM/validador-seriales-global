@@ -106,7 +106,7 @@ if run_btn:
     serie2 = df[c2_res].astype(str).reset_index(drop=True)
     esperados = pd.concat([serie1, serie2], ignore_index=True)
 
-    # Normalización exacta (igual a tu app actual)
+    # Normalización EXACTA (MISMA LÓGICA)
     esperados_norm = normalize_series(esperados, do_upper=True)
     esperados_norm = esperados_norm[esperados_norm.str.len() > 0].unique().tolist()
 
@@ -133,14 +133,69 @@ if run_btn:
     # ----------------------------
     tokens = extract_tokens_by_regex(raw_text, pattern)
 
-    # Normalizar tokens extraídos (idéntico a tu app actual)
+    # Normalización de tokens (MISMA LÓGICA EXACTA)
     tokens_norm = [normalize_series(pd.Series([t]), do_upper=True).iloc[0] for t in tokens]
 
     # ----------------------------
-    # Detectar faltantes EXACTOS
+    # Detectar faltantes exactos
     # ----------------------------
     faltantes = [s for s in esperados_norm if s not in tokens_norm]
 
+    # =====================================================================
+    #                       🔍 MODO DIAGNÓSTICO AVANZADO
+    # =====================================================================
+    modo_diagnostico = st.checkbox("Modo diagnóstico avanzado (opcional)")
+
+    if modo_diagnostico:
+
+        st.subheader("🔎 Diagnóstico avanzado")
+
+        # 1) Seriales extraídos del PDF
+        with st.expander("📄 Seriales extraídos del PDF/TXT (vista previa)"):
+            st.write(f"Se extrajeron {len(tokens_norm)} tokens normalizados.")
+            st.dataframe(tokens_norm[:200])
+
+        # 2) Duplicados en PDF
+        pdf_duplicados = pd.Series(tokens_norm)
+        dups = pdf_duplicados[pdf_duplicados.duplicated()].unique()
+
+        with st.expander("♻ Seriales duplicados en el PDF"):
+            if len(dups) > 0:
+                st.warning(f"Se encontraron {len(dups)} duplicados en el PDF.")
+                st.write(dups)
+            else:
+                st.info("No se encontraron duplicados en el PDF.")
+
+        # 3) Extras en el PDF (no están en Excel)
+        extras_pdf = [t for t in tokens_norm if t not in esperados_norm]
+
+        with st.expander("🧩 Seriales en el PDF que NO están en el Excel"):
+            if extras_pdf:
+                st.warning(f"{len(extras_pdf)} seriales aparecen en el PDF pero no están en tu Excel.")
+                st.write(extras_pdf[:50])
+            else:
+                st.success("No hay seriales extra en el PDF.")
+
+        # 4) Sugerencias fuzzy (solo diagnóstico)
+        from serial_utils import fuzzy_match_candidates
+
+        fuzzy_sugerencias = {}
+
+        for falt in faltantes:
+            sug = fuzzy_match_candidates(falt, tokens_norm, max_distance=1)
+            if sug:
+                fuzzy_sugerencias[falt] = sug
+
+        with st.expander("🔍 Sugerencias fuzzy (NO afecta validación)"):
+            if fuzzy_sugerencias:
+                st.warning("Se encontraron seriales similares. Esto NO afecta la validación exacta.")
+                st.write(fuzzy_sugerencias)
+            else:
+                st.info("No se encontraron seriales similares.")
+
+    # =====================================================================
+    #                           RESULTADO FINAL EXACTO
+    # =====================================================================
     if faltantes:
         st.error(
             f"No se encontraron {len(faltantes)} seriales en el PDF/TXT. "
